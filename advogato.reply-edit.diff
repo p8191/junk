@@ -1,0 +1,172 @@
+Index: article.c
+===================================================================
+--- article.c	(revision 145)
++++ article.c	(working copy)
+@@ -69,15 +69,25 @@
+       char *title;
+       char *body;
+       char *date;
++      char *update;
++      char *updatestr = "";
+ 
+       author = virgule_xml_find_child_string (root, "author", "(no author)");
+       title = virgule_xml_find_child_string (root, "title", "(no title)");
+       body = virgule_xml_find_child_string (root, "body", "(no body)");
+       date = virgule_xml_find_child_string (root, "date", "(no date)");
++      update = virgule_xml_find_child_string (root, "update", NULL);
++
++      if (update != NULL)
++        updatestr = apr_psprintf (vr->r->pool, " (updated %s)", virgule_render_date (vr, update, 1));
+ 
+       virgule_render_cert_level_begin (vr, author, CERT_STYLE_MEDIUM);
+-      virgule_buffer_printf (b, "<a name=\"%u\"><b>%s</b></a>, posted %s by <a href=\"%s/person/%s/\">%s</a> <a href=\"#%u\" style=\"text-decoration: none\">&raquo;</a>\n",
+-		     reply_num, title, virgule_render_date (vr, date, 1), vr->prefix, ap_escape_uri(vr->r->pool, author), author, reply_num);
++      virgule_buffer_printf (b, "<a name=\"%u\"><b>%s</b></a>, posted %s%s by <a href=\"%s/person/%s/\">%s</a> <a href=\"#%u\" style=\"text-decoration: none\">&raquo;</a>\n",
++		     reply_num, title, virgule_render_date (vr, date, 1), updatestr, vr->prefix, ap_escape_uri(vr->r->pool, author), author, reply_num);
++      if (vr->u && !strcmp (vr->u, author))
++        virgule_buffer_printf (vr->b,
++			       "&nbsp; <a href=\"%s/article/editreply.html?art_num=%u&reply_num=%u\" style=\"text-decoration: none\">[ Edit ]</a>",
++			       vr->prefix, art_num, reply_num);
+       virgule_render_cert_level_text (vr, author);
+       virgule_render_cert_level_end (vr, CERT_STYLE_MEDIUM);
+       virgule_buffer_printf (b, "<blockquote>\n%s\n</blockquote>\n", body);
+@@ -429,7 +439,15 @@
+ 	  virgule_buffer_printf (b, "<p>%s</p>\n", nice_body);
+ 	  virgule_buffer_puts (b, "<hr>\n");
+ 	  virgule_buffer_printf (b, "<p>Edit your reply:</p>\n"
+-			 "<form method=\"POST\" action=\"replysubmit.html\" accept-charset=\"UTF-8\">\n"
++			 "<form method=\"POST\" action=\"replysubmit.html\" accept-charset=\"UTF-8\">\n");
++
++       if(olddate && oldkey)
++	    {
++	      virgule_buffer_printf (b, "<input type=\"hidden\" name=\"olddate\" value=\"%s\" />\n", olddate);
++	      virgule_buffer_printf (b, "<input type=\"hidden\" name=\"oldkey\" value=\"%s\" />\n", oldkey);
++	    }
++
++	  virgule_buffer_printf (b,
+ 			 "<p><x>Article</x> title: <br>\n"
+ 			 "<input type=\"text\" name=\"title\" value=\"%s\" size=\"40\" maxlength=\"60\"></p>\n"
+ 			 "<p>Body of <x>article</x>: <br>\n"
+@@ -570,8 +588,7 @@
+       char *a, *d;
+       time_t t;
+       xmlNodePtr r;
+-      int art_num = atoi (oldkey);
+-      char *k = apr_psprintf (vr->r->pool, "articles/_%d/article.xml", art_num);
++      char *k = apr_psprintf (vr->r->pool, "%s/_%d%s", key_base, atoi (oldkey), key_suffix);
+       xmlDocPtr old = virgule_db_xml_get (vr->r->pool, vr->db, k);
+       if (old == NULL)
+         return virgule_send_error_page (vr, vERROR, "not found", "The specified <x>article</x> does not exist.");
+@@ -680,6 +697,9 @@
+ 
+   /* try to read the article */
+   art_num_str = apr_table_get (args, "key");
++  if (art_num_str == NULL)
++    return virgule_send_error_page (vr, vERROR, "form data", "No <x>article</x> key was specified.");
++
+   art_num = atoi (art_num_str);
+   key = apr_psprintf (vr->r->pool, "articles/_%d/article.xml", art_num);
+   doc = virgule_db_xml_get (vr->r->pool, vr->db, key);
+@@ -774,11 +794,74 @@
+ }
+ 
+ static int
++article_edit_reply_serve (VirguleReq *vr)
++{
++  apr_pool_t *p = vr->r->pool;
++  apr_table_t *args;
++  const char *art_num_str, *reply_num_str;
++  int art_num, reply_num;
++  char *key, *title, *author, *body, *date, *key_base;
++  xmlDoc *doc;
++  xmlNode *root;
++
++  virgule_auth_user (vr);
++
++  /* user must be logged in */
++  if (vr->u == NULL)
++    return virgule_send_error_page (vr, vERROR, "forbidden", "You can't post a reply because you're not logged in.");
++
++  if (!virgule_req_ok_to_reply (vr))
++    return virgule_send_error_page (vr, vERROR, "forbidden", "You can't post because you're not certified. Please see the <a href=\"%s/certs.html\">certification overview</a> for more details.", vr->prefix);
++
++  args = virgule_get_args_table (vr);
++  if (args == NULL)
++    return virgule_send_error_page (vr, vERROR, "form data", "No arguments specified.");
++
++  art_num_str = apr_table_get (args, "art_num");
++  if (art_num_str == NULL)
++    return virgule_send_error_page (vr, vERROR, "form data", "Need <x>article</x> number to reply to.");
++
++  art_num = atoi (art_num_str);
++
++  reply_num_str = apr_table_get (args, "reply_num");
++  if (reply_num_str == NULL)
++    return virgule_send_error_page (vr, vERROR, "form data", "Need to specify reply to edit.");
++
++  reply_num = atoi (reply_num_str);
++
++  key = apr_psprintf (p, "articles/_%d/_%d/reply.xml", art_num, reply_num);
++  doc = virgule_db_xml_get(p, vr->db, key);
++  if (doc == NULL)
++    return virgule_send_error_page (vr, vERROR, "database", "The specified <x>reply</x> to <x>article</x> could not be loaded.");
++
++  root = doc->xmlRootNode;
++
++  author = virgule_xml_find_child_string (root, "author", NULL);
++  if (strcmp (vr->u, author))
++    return virgule_send_error_page (vr, vERROR, "forbidden", "Only <x>replies</x> posted by you may be edited.");
++
++  date = virgule_xml_find_child_string (root, "date", NULL);
++  title = virgule_xml_find_child_string (root, "title", NULL);
++  body = virgule_xml_find_child_string (root, "body", NULL);
++
++  if (virgule_set_temp_buffer (vr) != 0)
++    return HTTP_INTERNAL_SERVER_ERROR;
++
++  key_base = apr_psprintf (p, "articles/_%d", atoi (art_num_str));
++
++  /* load the editor in preview mode */
++  return article_generic_submit_serve (vr, NULL, title, NULL, body, date,
++                                       reply_num_str, "reply",
++                                       key_base, "/reply.xml", art_num_str);
++}
++
++
++static int
+ article_reply_submit_serve (VirguleReq *vr)
+ {
+   apr_pool_t *p = vr->r->pool;
+   apr_table_t *args;
+-  const char *title, *art_num_str, *body;
++  const char *title, *art_num_str, *body, *oldkey;
+   char *key_base;
+   char *key_reply;
+   int last_reply;
+@@ -796,6 +879,7 @@
+   title = apr_table_get (args, "title");
+   art_num_str = apr_table_get (args, "art_num");
+   body = apr_table_get (args, "body");
++  oldkey = apr_table_get (args, "oldkey");
+ 
+   if (art_num_str == NULL)
+     return virgule_send_error_page (vr, vERROR, "form data", "This page requires <x>an article</x> number. If you're not playing around manually with URLs, it suggests there's something wrong with the site.");
+@@ -806,7 +890,7 @@
+   last_reply = virgule_db_dir_max (vr->db, key_base);
+   key_reply = apr_psprintf (p, "articles/_%d/_%d/reply.xml", atoi (art_num_str),last_reply);
+   doc = virgule_db_xml_get (p, vr->db, key_reply);
+-  if (doc != NULL)
++  if (doc != NULL && oldkey == NULL)
+     {
+       const char *old_author;
+       const char *old_title;
+@@ -950,6 +1034,9 @@
+   if (!strcmp (p, "edit.html"))
+     return article_edit_serve (vr);
+ 
++  if (!strcmp (p, "editreply.html"))
++    return article_edit_reply_serve (vr);
++
+   if (isdigit (p[0]))
+     return article_num_serve (vr, p);
+ 
