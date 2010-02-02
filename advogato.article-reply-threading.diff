@@ -29,7 +29,7 @@ Index: article.c
  /**
   * Render an img tag for the topic icon based on the passed topic name
   **/
-@@ -50,46 +69,89 @@
+@@ -50,46 +69,105 @@
  		    (*t)->url,(*t)->desc,(*t)->desc);		    
  }
  
@@ -82,6 +82,7 @@ Index: article.c
 +  const char *body = reply->body;
 +  const char *date = reply->date;
 +  const char *update = reply->update;
++  int ok_to_reply;
  
 -  doc = virgule_db_xml_get (p, vr->db, key);
 -  if (doc != NULL)
@@ -118,8 +119,7 @@ Index: article.c
 -      title = virgule_xml_find_child_string (root, "title", "(no title)");
 -      body = virgule_xml_find_child_string (root, "body", "(no body)");
 -      date = virgule_xml_find_child_string (root, "date", "(no date)");
-+  virgule_buffer_printf (b, "<p>[ <a href=\"%s/article/reply.html?art_num=%u&parent_num=%u\">Reply</a>",
-+  			 vr->prefix, art_num, reply->key);
++  ok_to_reply = virgule_req_ok_to_reply (vr);
  
 -      virgule_render_cert_level_begin (vr, author, CERT_STYLE_MEDIUM);
 -      virgule_buffer_printf (b, "<a name=\"%u\"><b>%s</b></a>, posted %s by <a href=\"%s/person/%s/\">%s</a> <a href=\"#%u\" style=\"text-decoration: none\">&raquo;</a>\n",
@@ -129,14 +129,31 @@ Index: article.c
 -      virgule_buffer_printf (b, "<blockquote>\n%s\n</blockquote>\n", body);
 -    }
 -  else
-+  if (reply->parent != NULL)
++  if (ok_to_reply || reply->parent != NULL)
      {
 -      virgule_buffer_printf (b, "<p>Error reading <x>article</x> %d.\n", art_num);
-+      virgule_buffer_printf (b, " | <a href=\"%s/article/%u/%u.html#%u\">Parent</a>",
-+      			   vr->prefix, art_num, reply->parent->key, reply->parent->key);
-     }
+-    }
++      virgule_buffer_puts (b, "<p>[ ");
 +
-+  virgule_buffer_puts (b, " ]\n</blockquote>\n");
++      if (ok_to_reply)
++        {
++	  virgule_buffer_printf (b, "<a href=\"%s/article/reply.html?art_num=%u&parent_num=%u\">Reply</a>",
++				 vr->prefix, art_num, reply->key);
++
++	  if (reply->parent != NULL)
++	    virgule_buffer_puts (b, " | ");
++        }
++    
++      if (reply->parent != NULL)
++        {
++          virgule_buffer_printf (b, "<a href=\"%s/article/%u/%u.html#%u\">Parent</a>",
++				 vr->prefix, art_num, reply->parent->key, reply->parent->key);
++        }
++
++      virgule_buffer_puts (b, " ]\n");
++  }
++
++  virgule_buffer_puts (b, " </blockquote>\n");
  }
  
  static void
@@ -145,7 +162,7 @@ Index: article.c
  {
    apr_pool_t *p = vr->r->pool;
    int lastread;
-@@ -105,13 +167,91 @@
+@@ -105,13 +183,91 @@
  #endif
    if (n_art > 0)
      {
@@ -237,7 +254,7 @@ Index: article.c
      }
    virgule_acct_set_lastread(vr, "articles", apr_psprintf(p, "%d", art_num), n_art - 1);
  }
-@@ -208,7 +348,7 @@
+@@ -208,7 +364,7 @@
        if (body)
  	  virgule_buffer_printf (b, "<p>%s</p>\n", body);
  
@@ -246,7 +263,7 @@ Index: article.c
  
        if (virgule_req_ok_to_reply (vr))
          {
-@@ -366,7 +506,8 @@
+@@ -366,7 +522,8 @@
  			      const char *submit_type,
  			      const char *key_base, 
  			      const char *key_suffix,
@@ -256,7 +273,7 @@ Index: article.c
  {
    apr_pool_t *p = vr->r->pool;
    apr_table_t *args;
-@@ -429,7 +570,15 @@
+@@ -429,7 +586,15 @@
  	  virgule_buffer_printf (b, "<p>%s</p>\n", nice_body);
  	  virgule_buffer_puts (b, "<hr>\n");
  	  virgule_buffer_printf (b, "<p>Edit your reply:</p>\n"
@@ -273,7 +290,7 @@ Index: article.c
  			 "<p><x>Article</x> title: <br>\n"
  			 "<input type=\"text\" name=\"title\" value=\"%s\" size=\"40\" maxlength=\"60\"></p>\n"
  			 "<p>Body of <x>article</x>: <br>\n"
-@@ -532,6 +681,11 @@
+@@ -532,6 +697,11 @@
    root = xmlNewDocNode (doc, NULL, (xmlChar *)"article", NULL);
    doc->xmlRootNode = root;
  
@@ -285,7 +302,7 @@ Index: article.c
    if(olddate != NULL)
      {
        xmlNewChild (root, NULL, (xmlChar *)"date", (xmlChar *)olddate);
-@@ -570,8 +724,7 @@
+@@ -570,8 +740,7 @@
        char *a, *d;
        time_t t;
        xmlNodePtr r;
@@ -295,7 +312,7 @@ Index: article.c
        xmlDocPtr old = virgule_db_xml_get (vr->r->pool, vr->db, k);
        if (old == NULL)
          return virgule_send_error_page (vr, vERROR, "not found", "The specified <x>article</x> does not exist.");
-@@ -587,6 +740,20 @@
+@@ -587,6 +756,20 @@
        a = virgule_xml_find_child_string (r, "author", NULL);
        if (strcmp (vr->u, a))
          return virgule_send_error_page (vr, vERROR, "forbidden", "Only <x>articles</x> posted by you may be edited.");
@@ -316,7 +333,7 @@ Index: article.c
      }
  
    status = virgule_db_xml_put (p, vr->db, key, doc);
-@@ -650,7 +817,7 @@
+@@ -650,7 +833,7 @@
  
    return article_generic_submit_serve (vr, topic, title, lead, body, NULL, NULL,
  				       "article",
@@ -325,7 +342,7 @@ Index: article.c
  }
  
  
-@@ -680,6 +847,9 @@
+@@ -680,6 +863,9 @@
  
    /* try to read the article */
    art_num_str = apr_table_get (args, "key");
@@ -335,7 +352,7 @@ Index: article.c
    art_num = atoi (art_num_str);
    key = apr_psprintf (vr->r->pool, "articles/_%d/article.xml", art_num);
    doc = virgule_db_xml_get (vr->r->pool, vr->db, key);
-@@ -708,7 +878,7 @@
+@@ -708,7 +894,7 @@
    return article_generic_submit_serve (vr, topic, title, lead, body, date, 
                                         art_num_str,
  				       "article",
@@ -344,7 +361,7 @@ Index: article.c
  }
  
  
-@@ -718,8 +888,8 @@
+@@ -718,8 +904,8 @@
  {
    apr_pool_t *p = vr->r->pool;
    apr_table_t *args;
@@ -355,7 +372,7 @@ Index: article.c
    char *key;
    xmlDoc *doc;
    xmlNode *root, *tree;
-@@ -740,7 +910,17 @@
+@@ -740,7 +926,17 @@
  
    art_num = atoi (art_num_str);
  
@@ -374,7 +391,7 @@ Index: article.c
    doc = virgule_db_xml_get (p, vr->db, key);
    if (doc == NULL)
      return virgule_send_error_page (vr, vERROR, "database", "<x>Article</x> %d not found.", art_num);
-@@ -754,7 +934,7 @@
+@@ -754,7 +950,7 @@
    if (virgule_set_temp_buffer (vr) != 0)
      return HTTP_INTERNAL_SERVER_ERROR;
  
@@ -383,7 +400,7 @@ Index: article.c
  		 "<form method=\"POST\" action=\"replysubmit.html\" accept-charset=\"UTF-8\">\n"
  		 "<p>Reply title: <br>\n"
  		 "<input type=\"text\" name=\"title\" size=50 maxlength=50></p>\n"
-@@ -763,9 +943,14 @@
+@@ -763,9 +959,14 @@
  		 "</textarea></p>\n"
  		 "<input type=\"hidden\" name=\"art_num\" value=\"%d\">\n"
  		 "<p><input type=\"submit\" name=post value=\"Post\">\n"
@@ -400,7 +417,7 @@ Index: article.c
    virgule_render_acceptable_html (vr);
  
    virgule_set_main_buffer (vr);
-@@ -774,14 +959,77 @@
+@@ -774,14 +975,77 @@
  }
  
  static int
@@ -480,7 +497,7 @@ Index: article.c
    xmlDoc *doc;
  
    virgule_auth_user (vr);
-@@ -796,17 +1044,28 @@
+@@ -796,17 +1060,28 @@
    title = apr_table_get (args, "title");
    art_num_str = apr_table_get (args, "art_num");
    body = apr_table_get (args, "body");
@@ -511,7 +528,7 @@ Index: article.c
      {
        const char *old_author;
        const char *old_title;
-@@ -818,7 +1077,7 @@
+@@ -818,7 +1093,7 @@
  
    return article_generic_submit_serve (vr, NULL, title, NULL, body, NULL, NULL,
  				       "reply",
@@ -520,7 +537,7 @@ Index: article.c
  }
  
  /**
-@@ -877,19 +1136,29 @@
+@@ -877,19 +1152,29 @@
  article_num_serve (VirguleReq *vr, const char *t)
  {
    char *tail, *key, *title;
@@ -554,7 +571,7 @@ Index: article.c
    root = xmlDocGetRootElement (doc);
    title = virgule_xml_find_child_string (root, "title", "(no title)");
  
-@@ -897,8 +1166,15 @@
+@@ -897,8 +1182,15 @@
    if (virgule_set_temp_buffer (vr) != 0)
      return HTTP_INTERNAL_SERVER_ERROR;
  
@@ -572,7 +589,7 @@ Index: article.c
  
    /* switch back to the main buffer */
    virgule_set_main_buffer (vr);
-@@ -950,6 +1226,9 @@
+@@ -950,6 +1242,9 @@
    if (!strcmp (p, "edit.html"))
      return article_edit_serve (vr);
  
